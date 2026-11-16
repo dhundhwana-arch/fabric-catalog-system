@@ -3,17 +3,33 @@ import os
 os.environ.setdefault("DATABASE_URL", "sqlite:///./test_catalog.db")
 os.environ.setdefault("ADMIN_API_KEY", "test-admin-key")
 os.environ.setdefault("UPLOAD_DIR", "./test_uploads")
+# The limiter is per-process/per-IP; tests issue far more than the
+# production default, so disable it for the suite (it has its own test).
+os.environ.setdefault("RATE_LIMIT_PER_MINUTE", "0")
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 
-from app.database import Base, get_db
+from app.database import Base, engine, get_db
 from app.main import app
 
-engine = create_engine("sqlite:///./test_catalog.db", connect_args={"check_same_thread": False})
+# Use the application engine so tests exercise the real SQLite pragmas
+# (WAL, busy_timeout, BEGIN IMMEDIATE) rather than a bare engine.
 TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+_TABLES_IN_FK_ORDER = [
+    "inventory_movements",
+    "inventory_lots",
+    "fabric_prices",
+    "fabric_images",
+    "supplier_references",
+    "fabric_variants",
+    "fabrics",
+    "fabric_categories",
+    "id_sequences",
+]
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -22,17 +38,35 @@ def _tables():
     Base.metadata.create_all(bind=engine)
     yield
     Base.metadata.drop_all(bind=engine)
+    engine.dispose()
+
+
+def _wipe():
+    """Clear all rows between tests.
+
+    A transaction-rollback harness is deliberately NOT used: the app runs
+    with ``BEGIN IMMEDIATE`` on SQLite (required for correct concurrent ID
+    allocation), so a long-lived outer transaction in a fixture would block
+    the application's own writes.
+    """
+    with engine.begin() as conn:
+        for table in _TABLES_IN_FK_ORDER:
+            conn.execute(text(f"DELETE FROM {table}"))
+
+
+@pytest.fixture(autouse=True)
+def _clean(_tables):
+    _wipe()
+    yield
 
 
 @pytest.fixture()
 def db_session():
-    connection = engine.connect()
-    transaction = connection.begin()
-    session = TestingSession(bind=connection)
-    yield session
-    session.close()
-    transaction.rollback()
-    connection.close()
+    db = TestingSession()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 @pytest.fixture()
@@ -41,9 +75,11 @@ def client(db_session):
         yield db_session
 
     app.dependency_overrides[get_db] = _override
-    with TestClient(app) as c:
-        yield c
-    app.dependency_overrides.clear()
+    try:
+        with TestClient(app) as c:
+            yield c
+    finally:
+        app.dependency_overrides.clear()
 
 
 @pytest.fixture()

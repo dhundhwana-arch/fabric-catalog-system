@@ -239,8 +239,13 @@ class InventoryLot(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     lot_id: Mapped[str] = mapped_column(String(16), unique=True, nullable=False, index=True)
+    # One inventory lot per variant: enforced in the DB so two concurrent
+    # PUTs cannot create duplicate lots for the same variant.
     variant_id: Mapped[int] = mapped_column(
-        ForeignKey("fabric_variants.id", ondelete="CASCADE"), nullable=False, index=True
+        ForeignKey("fabric_variants.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
     )
     stock_quantity: Mapped["Numeric"] = mapped_column(Numeric(12, 3), default=0, nullable=False)
     reserved_quantity: Mapped["Numeric"] = mapped_column(Numeric(12, 3), default=0, nullable=False)

@@ -24,9 +24,11 @@ def list_variants(
     page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
-    stmt = select(FabricVariant)
+    from app.models import Fabric
+
+    stmt = select(FabricVariant).join(Fabric, FabricVariant.fabric_id == Fabric.id)
     if not include_inactive:
-        stmt = stmt.where(FabricVariant.is_active.is_(True))
+        stmt = stmt.where(FabricVariant.is_active.is_(True), Fabric.is_active.is_(True))
     if fabric_id:
         stmt = stmt.where(FabricVariant.fabric_id == fabric_id)
     if colour:

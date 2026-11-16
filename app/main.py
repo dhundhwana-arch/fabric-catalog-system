@@ -5,6 +5,7 @@ static files. Run:  uvicorn app.main:app --host 0.0.0.0 --port 8000
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -17,6 +18,14 @@ from app.database import init_db
 from app.routers import categories, colours, export, fabrics, images, inventory, prices, suppliers, variants
 
 settings = get_settings()
+settings.validate_production()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    init_db()
+    yield
+
 
 app = FastAPI(
     title="Custom Shirt Studio — Fabric Catalog System",
@@ -24,17 +33,43 @@ app = FastAPI(
         "Module 02: Fabric catalogue, colours, images, prices and availability. "
         "Public GET endpoints are open; all mutating endpoints require an admin Bearer token."
     ),
-    version="1.0.0",
+    version="1.0.1",
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
+    lifespan=lifespan,
 )
 
+# --- Simple in-memory fixed-window rate limiter (per IP, per minute) ---
+if settings.rate_limit_per_minute > 0:
+    import time
+    from collections import defaultdict
+
+    from fastapi import Response
+    from starlette.middleware.base import BaseHTTPMiddleware
+
+    _hits: dict[str, list[float]] = defaultdict(list)
+
+    class RateLimitMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            ip = request.client.host if request.client else "unknown"
+            now = time.time()
+            window = [t for t in _hits[ip] if now - t < 60]
+            if len(window) >= settings.rate_limit_per_minute:
+                return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"})
+            window.append(now)
+            _hits[ip] = window
+            return await call_next(request)
+
+    app.add_middleware(RateLimitMiddleware)
+
 origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+# Wildcard origins cannot be combined with credentials (browsers reject it,
+# and it would be insecure). Only allow credentials for explicit origins.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_credentials=True,
+    allow_credentials=origins != ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -47,7 +82,7 @@ async def unhandled(request: Request, exc: Exception):  # pragma: no cover - saf
 
 @app.get("/health", tags=["health"])
 def health():
-    return {"status": "ok", "module": "fabric-catalog-system", "version": "1.0.0"}
+    return {"status": "ok", "module": "fabric-catalog-system", "version": "1.0.1"}
 
 
 @app.get("/api/v1", tags=["meta"])
@@ -84,8 +119,3 @@ app.mount("/uploads", StaticFiles(directory=str(upload_dir)), name="uploads")
 static_dir = Path(__file__).parent / "static"
 if static_dir.exists():
     app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
-
-
-@app.on_event("startup")
-def _startup():
-    init_db()

@@ -49,11 +49,17 @@ def test_upload_rejects_fake_image(client, admin_headers, seeded):
     assert r.status_code == 422
 
 
+def _real_png() -> bytes:
+    """A genuinely decodable PNG (Pillow-verified) for the upload path."""
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 4), (10, 20, 30)).save(buf, "PNG")
+    return buf.getvalue()
+
+
 def test_upload_valid_png(client, admin_headers, seeded):
-    png = bytes.fromhex(
-        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
-        "0000000a49444154789c6360000000020001e221bc330000000049454e44ae426082"
-    )
+    png = _real_png()
     files = {"file": ("swatch.png", io.BytesIO(png), "image/png")}
     r = client.post(
         "/api/v1/images/upload",

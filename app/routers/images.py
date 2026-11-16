@@ -6,6 +6,7 @@ database only stores the URL + storage reference — never image binaries.
 from __future__ import annotations
 
 import hashlib
+import io
 import uuid
 from pathlib import Path
 
@@ -34,7 +35,8 @@ EXT = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
 def _validate_upload(file: UploadFile, settings) -> bytes:
     if file.content_type not in settings.allowed_image_types:
         raise HTTPException(status_code=415, detail=f"Unsupported file type: {file.content_type}")
-    data = file.file.read()
+    # Read with a hard cap so an oversized body is never fully buffered.
+    data = file.file.read(settings.max_upload_bytes + 1)
     if len(data) == 0:
         raise HTTPException(status_code=422, detail="Empty file")
     if len(data) > settings.max_upload_bytes:
@@ -43,6 +45,33 @@ def _validate_upload(file: UploadFile, settings) -> bytes:
     if prefixes and not any(data.startswith(p) for p in prefixes):
         raise HTTPException(status_code=422, detail="File content does not match declared type")
     return data
+
+
+def _verify_decodable(data: bytes) -> None:
+    """Reject files whose bytes are not a real, non-huge image.
+
+    Magic bytes alone can be faked; decoding also caps pixel dimensions so
+    a tiny "decompression bomb" cannot exhaust server memory when the
+    asset is later processed by another module.
+    """
+    try:
+        from PIL import Image  # optional dependency
+
+        with Image.open(io.BytesIO(data)) as img:
+            width, height = img.size
+            img.verify()
+        if width * height > settings_max_pixels():
+            raise HTTPException(status_code=413, detail="Image dimensions too large")
+    except HTTPException:
+        raise
+    except ImportError:
+        return  # Pillow absent: magic-byte + size checks still apply
+    except Exception:
+        raise HTTPException(status_code=422, detail="File is not a decodable image")
+
+
+def settings_max_pixels() -> int:
+    return 40_000_000  # 40 MP
 
 
 def _save_upload(data: bytes, content_type: str, settings) -> tuple[str, str]:
@@ -98,6 +127,7 @@ def upload_image(
     if variant_id is not None:
         get_variant_or_404(db, variant_id)
     data = _validate_upload(file, settings)
+    _verify_decodable(data)
     url, ref = _save_upload(data, file.content_type, settings)
     img = FabricImage(
         image_id=next_id(db, "image"),

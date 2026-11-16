@@ -105,17 +105,31 @@ def create(payload: FabricCreate, db: Session = Depends(get_db)):
     return create_fabric(db, payload)
 
 
+def _detail_payload(fabric: Fabric, include_inactive: bool) -> dict:
+    """Build a detail response WITHOUT mutating ORM state.
+
+    Assigning a filtered list onto ``fabric.variants`` would dirty the
+    session's collection and leak that filtered view into later requests.
+    """
+    data = FabricOut.model_validate(fabric).model_dump()
+    variants = [v for v in fabric.variants if include_inactive or v.is_active]
+    data["category"] = fabric.category
+    data["variants"] = variants
+    data["images"] = list(fabric.images)
+    return data
+
+
 @router.get("/{fabric_pk}", response_model=FabricDetailOut)
-def detail(fabric_pk: int, db: Session = Depends(get_db)):
-    return get_fabric_or_404(db, fabric_pk)
+def detail(fabric_pk: int, include_inactive: bool = False, db: Session = Depends(get_db)):
+    return _detail_payload(get_fabric_or_404(db, fabric_pk), include_inactive)
 
 
 @router.get("/by-code/{fabric_code}", response_model=FabricDetailOut)
-def detail_by_code(fabric_code: str, db: Session = Depends(get_db)):
+def detail_by_code(fabric_code: str, include_inactive: bool = False, db: Session = Depends(get_db)):
     fabric = db.execute(select(Fabric).where(Fabric.fabric_id == fabric_code.upper())).scalar_one_or_none()
     if fabric is None:
         raise HTTPException(status_code=404, detail="Fabric not found")
-    return fabric
+    return _detail_payload(fabric, include_inactive)
 
 
 @router.put("/{fabric_pk}", response_model=FabricOut, dependencies=[Depends(require_admin)])
@@ -131,17 +145,21 @@ def update(fabric_pk: int, payload: FabricUpdate, db: Session = Depends(get_db))
 
 @router.delete("/{fabric_pk}", dependencies=[Depends(require_admin)])
 def archive(fabric_pk: int, hard: bool = False, db: Session = Depends(get_db)):
-    """Archive (soft-delete) by default. Hard delete only if no variants exist."""
+    """Archive (soft-delete) by default. Hard delete only if no variants/images exist."""
     fabric = get_fabric_or_404(db, fabric_pk)
     if hard:
-        if fabric.variants:
+        if fabric.variants or fabric.images:
             raise HTTPException(
                 status_code=409,
-                detail="Cannot hard-delete a fabric that has variants. Archive instead.",
+                detail="Cannot hard-delete a fabric that has variants or images. Archive instead.",
             )
         db.delete(fabric)
         db.commit()
         return {"message": "Fabric permanently deleted"}
+    # Cascade-archive variants so they disappear from public variant/colour
+    # listings. Images and inventory lots are preserved for history.
     fabric.is_active = False
+    for v in fabric.variants:
+        v.is_active = False
     db.commit()
     return {"message": "Fabric archived"}

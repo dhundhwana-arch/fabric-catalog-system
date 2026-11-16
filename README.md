@@ -17,7 +17,7 @@ for future integration with the other seven Custom Shirt Studio modules.
 - Permanent, database-allocated IDs (`FAB-001`, `FVAR-001`, `FIMG-001`, `FLOT-001`, `FCAT-001`)
 - Search, category/type/colour/price/availability filtering, sorting, pagination
 - Customer-facing catalogue + admin panel (single-page app, mobile-friendly)
-- Image upload with type/size/magic-byte validation and safe generated names
+- Image upload with type/size/magic-byte + decode validation and safe generated names
 - Decimal-safe INR pricing; supplier costs are admin-only and never public
 - Sourcing model: `CUSTOMER_SUPPLIED` / `BUSINESS_INVENTORY` / `SUPPLIER_SOURCED`
 - Catalogue export (JSON / CSV), OpenAPI docs at `/docs`
@@ -37,7 +37,7 @@ app/
   routers/         fabrics, variants, categories, colours, images,
                    prices, inventory, suppliers, export
   static/          Customer catalogue + admin UI (HTML/CSS/JS)
-tests/             34 pytest tests
+tests/             62 pytest tests (incl. concurrency + security)
 docs/              Data model, colour, image, inventory, API, installation docs
 ```
 

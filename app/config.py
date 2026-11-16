@@ -17,7 +17,22 @@ class Settings(BaseSettings):
 
     # Admin authentication: Bearer token. MUST be overridden in production.
     # Generate: python -c "import secrets; print(secrets.token_urlsafe(32))"
+    # The app refuses to start in production with the default value.
     admin_api_key: str = "dev-only-change-me"
+
+    def validate_production(self) -> None:
+        if self.app_env == "production" and (
+            self.admin_api_key in (
+                "dev-only-change-me",
+                "change-me",
+                "replace-with-a-long-random-secret",
+            )
+            or len(self.admin_api_key) < 16
+        ):
+            raise RuntimeError(
+                "ADMIN_API_KEY must be set to a strong secret when APP_ENV=production. "
+                "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(32))\""
+            )
 
     # Image uploads
     upload_dir: str = "./uploads"
@@ -35,7 +50,7 @@ class Settings(BaseSettings):
     max_page_size: int = 100
 
     # Rate limiting (requests per minute per IP, 0 = disabled)
-    rate_limit_per_minute: int = 0
+    rate_limit_per_minute: int = 120
 
 
 @lru_cache

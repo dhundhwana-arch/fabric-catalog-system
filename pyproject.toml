@@ -1,9 +1,18 @@
 [project]
 name = "fabric-catalog-system"
-version = "1.0.0"
+version = "1.0.1"
 description = "Custom Shirt Studio — Module 02: Fabric Catalog System"
 requires-python = ">=3.11"
 license = { text = "MIT" }
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "sqlalchemy>=2.0",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "python-multipart>=0.0.9",
+    "pillow>=10.0.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
