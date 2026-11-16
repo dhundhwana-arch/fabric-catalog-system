@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Custom Shirt Studio — Fabric Catalogue</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header>
+  <h1>Custom Shirt Studio</h1>
+  <p class="tagline">Fabric Catalogue — Dhundhwana, Gujarat</p>
+  <nav>
+    <button id="tab-catalogue" class="tab active">Catalogue</button>
+    <button id="tab-admin" class="tab">Admin</button>
+  </nav>
+</header>
+
+<main>
+  <!-- CUSTOMER CATALOGUE -->
+  <section id="view-catalogue">
+    <div class="filters">
+      <input id="f-search" type="search" placeholder="Search by name or fabric ID (e.g. FAB-001)">
+      <select id="f-category"><option value="">All categories</option></select>
+      <input id="f-colour" type="search" placeholder="Colour (e.g. Navy)">
+      <select id="f-availability">
+        <option value="">All availability</option>
+        <option>AVAILABLE</option><option>LOW_STOCK</option><option>OUT_OF_STOCK</option>
+        <option>ON_REQUEST</option><option>UNKNOWN</option><option>DISCONTINUED</option>
+      </select>
+      <input id="f-min" type="number" min="0" placeholder="Min ₹">
+      <input id="f-max" type="number" min="0" placeholder="Max ₹">
+      <button id="f-apply">Search</button>
+      <button id="f-clear" class="secondary">Clear</button>
+    </div>
+    <p class="notice">Digital colour representation may differ from the actual physical fabric due to lighting, display settings, and material characteristics.</p>
+    <div id="catalogue-grid" class="grid"></div>
+    <div class="pager">
+      <button id="pg-prev" class="secondary">← Prev</button>
+      <span id="pg-info"></span>
+      <button id="pg-next" class="secondary">Next →</button>
+    </div>
+  </section>
+
+  <!-- ADMIN -->
+  <section id="view-admin" hidden>
+    <div class="admin-login">
+      <label>Admin API key <input id="admin-key" type="password" placeholder="Bearer token"></label>
+      <button id="admin-save">Save</button>
+      <span id="admin-status"></span>
+    </div>
+    <div class="admin-grid">
+      <div class="card">
+        <h3>Add category</h3>
+        <input id="a-cat-name" placeholder="Category name">
+        <button id="a-cat-add">Add category</button>
+      </div>
+      <div class="card">
+        <h3>Add fabric</h3>
+        <input id="a-fab-name" placeholder="Fabric name">
+        <select id="a-fab-cat"><option value="">No category</option></select>
+        <input id="a-fab-type" placeholder="Fabric type (e.g. Poplin)">
+        <select id="a-fab-sourcing">
+          <option value="BUSINESS_INVENTORY">Business inventory</option>
+          <option value="CUSTOMER_SUPPLIED">Customer supplied</option>
+          <option value="SUPPLIER_SOURCED">Supplier sourced</option>
+        </select>
+        <button id="a-fab-add">Add fabric</button>
+      </div>
+      <div class="card">
+        <h3>Add variant (colour)</h3>
+        <input id="a-var-fabric" type="number" placeholder="Fabric PK (internal id)">
+        <input id="a-var-colour" placeholder="Colour name (e.g. Navy Blue)">
+        <input id="a-var-hex" placeholder="HEX (e.g. #000080)">
+        <input id="a-var-price" type="number" min="0" step="0.01" placeholder="Price ₹ per metre">
+        <select id="a-var-avail">
+          <option>UNKNOWN</option><option>AVAILABLE</option><option>LOW_STOCK</option>
+          <option>OUT_OF_STOCK</option><option>ON_REQUEST</option><option>DISCONTINUED</option>
+        </select>
+        <button id="a-var-add">Add variant</button>
+      </div>
+      <div class="card">
+        <h3>Upload photo</h3>
+        <input id="a-img-fabric" type="number" placeholder="Fabric PK">
+        <input id="a-img-file" type="file" accept="image/jpeg,image/png,image/webp">
+        <select id="a-img-type">
+          <option>FRONT</option><option>CLOSE_UP</option><option>TEXTURE</option><option>SWATCH</option><option>OTHER</option>
+        </select>
+        <button id="a-img-add">Upload</button>
+      </div>
+      <div class="card">
+        <h3>Update stock</h3>
+        <input id="a-inv-variant" type="number" placeholder="Variant PK">
+        <input id="a-inv-stock" type="number" min="0" step="0.001" placeholder="Stock qty">
+        <input id="a-inv-reserved" type="number" min="0" step="0.001" placeholder="Reserved qty">
+        <button id="a-inv-save">Save stock</button>
+      </div>
+      <div class="card">
+        <h3>Export catalogue</h3>
+        <button id="a-export-json">Download JSON</button>
+        <button id="a-export-csv">Download CSV</button>
+      </div>
+    </div>
+    <p id="admin-msg" class="msg"></p>
+  </section>
+</main>
+
+<!-- FABRIC DETAIL MODAL -->
+<div id="modal" class="modal" hidden>
+  <div class="modal-box">
+    <button id="modal-close" class="secondary">✕ Close</button>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
+<footer>Module 02 · Fabric Catalog System · Custom Shirt Studio</footer>
+<script src="/app.js"></script>
+</body>
+</html>

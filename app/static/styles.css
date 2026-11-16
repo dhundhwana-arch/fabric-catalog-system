@@ -1,0 +1,29 @@
+:root{--ink:#1f2937;--muted:#6b7280;--line:#e5e7eb;--accent:#b45309;--bg:#fafaf9}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--ink);background:var(--bg)}
+header{background:#fff;border-bottom:1px solid var(--line);padding:16px 20px}
+h1{margin:0;font-size:22px} .tagline{margin:4px 0 12px;color:var(--muted);font-size:14px}
+nav{display:flex;gap:8px}.tab{padding:8px 16px;border:1px solid var(--line);background:#fff;border-radius:8px;cursor:pointer}
+.tab.active{background:var(--ink);color:#fff}
+main{max-width:1100px;margin:0 auto;padding:20px}
+.filters{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+input,select{padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:14px;background:#fff}
+button{padding:8px 14px;border:0;border-radius:8px;background:var(--accent);color:#fff;cursor:pointer;font-size:14px}
+button.secondary{background:#fff;color:var(--ink);border:1px solid var(--line)}
+.notice{background:#fffbeb;border:1px solid #fde68a;color:#92400e;padding:10px 12px;border-radius:8px;font-size:13px;margin-bottom:16px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px}
+.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px}
+.card h3{margin:0 0 8px;font-size:16px}.card .meta{color:var(--muted);font-size:13px;margin:4px 0}
+.swatch{display:inline-block;width:18px;height:18px;border-radius:50%;border:1px solid var(--line);vertical-align:middle;margin-right:6px}
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;background:#f3f4f6}
+.badge.AVAILABLE{background:#dcfce7;color:#166534}.badge.OUT_OF_STOCK{background:#fee2e2;color:#991b1b}
+.badge.LOW_STOCK{background:#fef9c3;color:#854d0e}.badge.ON_REQUEST{background:#dbeafe;color:#1e40af}
+.price{font-weight:700}.pager{display:flex;gap:12px;align-items:center;margin-top:16px}
+.admin-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;margin-top:16px}
+.admin-grid .card{display:flex;flex-direction:column;gap:8px}
+.admin-login{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.msg{color:#166534;min-height:20px}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:20px;z-index:10}
+.modal-box{background:#fff;border-radius:12px;max-width:640px;width:100%;max-height:85vh;overflow:auto;padding:20px}
+.modal-box img{max-width:100%;border-radius:8px}
+footer{text-align:center;color:var(--muted);font-size:13px;padding:24px}
+@media(max-width:640px){.filters input,.filters select{flex:1 1 100%}}

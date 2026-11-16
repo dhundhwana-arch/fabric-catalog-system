@@ -1,0 +1,12 @@
+[project]
+name = "fabric-catalog-system"
+version = "1.0.0"
+description = "Custom Shirt Studio — Module 02: Fabric Catalog System"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100

@@ -1,0 +1,10 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: sqlite:///./fabric_catalog.db
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-dev-only-change-me}
+    volumes:
+      - ./uploads:/app/uploads
