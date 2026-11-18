@@ -11,13 +11,14 @@ import threading
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app import models
 from app.database import Base
+from app.inventory_service import adjust_stock, ensure_lot
 from app.schemas import FabricCreate, VariantCreate
-from app.services import create_fabric, create_variant, record_price, upsert_inventory
+from app.services import create_fabric, create_variant, record_price
 
 
 def _fresh_session_factory(tmp_path, name):
@@ -128,8 +129,9 @@ def test_concurrent_image_lot_and_price_ids(tmp_path):
             with lock:
                 price_ids.append(price.price_id)
             # inventory lot
-            lot = upsert_inventory(
-                db, variant_pks[n], 10, 0, models.Unit.METER, models.MovementType.RECEIVE, "test"
+            ensure_lot(db, variant_pks[n], models.Unit.METER)
+            lot = adjust_stock(
+                db, variant_pks[n], Decimal("10"), models.MovementType.RECEIVE, "test"
             )
             with lock:
                 lot_ids.append(lot.lot_id)
@@ -219,6 +221,10 @@ def test_mutating_endpoints_require_admin(client, seeded):
         ("post", "/api/v1/categories", {"name": "X"}),
         ("post", "/api/v1/variants", {"fabric_id": fid, "colour_name": "R", "colour_hex": "#000000"}),
         ("post", "/api/v1/prices", {"variant_id": seeded["v1"]["id"], "customer_price": "1.00"}),
+        ("post", f"/api/v1/inventory/{seeded['v1']['id']}/adjust", {"quantity": "5"}),
+        ("post", f"/api/v1/inventory/{seeded['v1']['id']}/reserve", {"quantity": "5"}),
+        ("post", f"/api/v1/inventory/{seeded['v1']['id']}/release", {"quantity": "5"}),
+        ("post", f"/api/v1/inventory/{seeded['v1']['id']}/dispatch", {"quantity": "5"}),
         ("put", f"/api/v1/inventory/{seeded['v1']['id']}", {"stock_quantity": "5"}),
     ]
     for method, url, body in calls:
@@ -314,8 +320,9 @@ def test_upload_ignores_path_traversal_filename(client, admin_headers, seeded, t
     url = r.json()["image_url"]
     assert url.startswith("/uploads/")
     assert ".." not in url and "etc" not in url
-    from app.config import get_settings
     from pathlib import Path
+
+    from app.config import get_settings
 
     stored = Path(get_settings().upload_dir) / Path(url).name
     assert stored.exists()
@@ -333,7 +340,6 @@ def test_upload_rejects_undecodable_bytes(client, admin_headers, seeded):
 # 5. Decimal-safe INR pricing + price history
 # --------------------------------------------------------------------------
 def test_decimal_precision_preserved(client, admin_headers, seeded):
-    from decimal import Decimal
 
     vid = seeded["v1"]["id"]
     r = client.post(
@@ -418,11 +424,16 @@ def test_hard_delete_blocked_by_variants_and_images(client, admin_headers, seede
 
 def test_archived_fabric_keeps_inventory_history(client, admin_headers, seeded):
     vid = seeded["v1"]["id"]
-    client.put(
-        f"/api/v1/inventory/{vid}",
-        json={"stock_quantity": "12.500", "reserved_quantity": "2.000"},
+    assert client.post(
+        f"/api/v1/inventory/{vid}/adjust",
+        json={"quantity": "12.500", "movement_type": "RECEIVE"},
         headers=admin_headers,
-    )
+    ).status_code == 200
+    assert client.post(
+        f"/api/v1/inventory/{vid}/reserve",
+        json={"quantity": "2.000"},
+        headers=admin_headers,
+    ).status_code == 200
     fid = seeded["fabric"]["id"]
     client.delete(f"/api/v1/fabrics/{fid}", headers=admin_headers)
     # Inventory rows survive the soft archive (audit trail intact)
@@ -459,12 +470,11 @@ def test_concurrent_inventory_upsert_single_lot(tmp_path):
     def worker(n):
         db = Session()
         try:
-            upsert_inventory(
+            ensure_lot(db, variant_pk, models.Unit.METER)
+            adjust_stock(
                 db,
                 variant_pk,
                 Decimal("10.000"),
-                Decimal("0.000"),
-                models.Unit.METER,
                 models.MovementType.RECEIVE,
                 f"t{n}",
             )
@@ -484,22 +494,27 @@ def test_concurrent_inventory_upsert_single_lot(tmp_path):
 
 def test_negative_and_oversell_rejected(client, admin_headers, seeded):
     vid = seeded["v1"]["id"]
-    assert client.put(
-        f"/api/v1/inventory/{vid}", json={"stock_quantity": "-5"}, headers=admin_headers
-    ).status_code == 422
-    assert client.put(
-        f"/api/v1/inventory/{vid}",
-        json={"stock_quantity": "5", "reserved_quantity": "9"},
-        headers=admin_headers,
-    ).status_code == 422
+    # Negative result is refused by the atomic conditional update itself.
+    assert client.post(
+        f"/api/v1/inventory/{vid}/adjust", json={"quantity": "-5"}, headers=admin_headers
+    ).status_code == 409
+    # Reserving more than available is refused.
+    client.post(
+        f"/api/v1/inventory/{vid}/adjust", json={"quantity": "5"}, headers=admin_headers
+    )
+    assert client.post(
+        f"/api/v1/inventory/{vid}/reserve", json={"quantity": "9"}, headers=admin_headers
+    ).status_code == 409
 
 
 def test_inventory_persists_across_updates(client, admin_headers, seeded):
     vid = seeded["v1"]["id"]
-    client.put(f"/api/v1/inventory/{vid}", json={"stock_quantity": "20.000"}, headers=admin_headers)
-    r = client.put(
-        f"/api/v1/inventory/{vid}", json={"stock_quantity": "15.000"}, headers=admin_headers
+    client.post(
+        f"/api/v1/inventory/{vid}/adjust", json={"quantity": "20.000"}, headers=admin_headers
     )
-    assert r.status_code == 200
+    r = client.post(
+        f"/api/v1/inventory/{vid}/adjust", json={"quantity": "-5.000"}, headers=admin_headers
+    )
+    assert r.status_code == 200, r.text
     assert str(r.json()["stock_quantity"]) in ("15.0", "15.000")
     assert str(r.json()["reserved_quantity"]) in ("0.0", "0.000")

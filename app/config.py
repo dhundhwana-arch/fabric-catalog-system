@@ -1,5 +1,7 @@
 """Application configuration via environment variables."""
 from functools import lru_cache
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -49,8 +51,35 @@ class Settings(BaseSettings):
     default_page_size: int = 20
     max_page_size: int = 100
 
-    # Rate limiting (requests per minute per IP, 0 = disabled)
+    # ------------------------------------------------------------------
+    # Rate limiting
+    # ------------------------------------------------------------------
+    # Requests per minute per client key. 0 disables limiting entirely.
     rate_limit_per_minute: int = 120
+    # "memory" = THIS PROCESS ONLY (default; limit x workers in practice).
+    # "redis"  = shared across workers/replicas using REDIS_URL.
+    # "off"    = disabled.
+    rate_limit_backend: Literal["memory", "redis", "off"] = "memory"
+    # Only used when backend == "redis". Never logged.
+    redis_url: str | None = None
+    # If Redis is down: True = allow requests (fail-open), False = 503.
+    rate_limit_fail_open: bool = True
+    # Number of reverse proxies in front of the app that overwrite
+    # X-Forwarded-For. 0 = ignore the header entirely (prevents spoofing
+    # to bypass rate limits).
+    trusted_proxy_count: int = 0
+
+    # ------------------------------------------------------------------
+    # Backend-to-backend authentication (Module 01 -> Module 02)
+    # ------------------------------------------------------------------
+    # Module 01 authenticates with its own service key, never the human
+    # admin key. Comma-separated "name:key" pairs.
+    service_api_keys: str = ""
+    # Default scopes granted to a service key unless overridden by
+    # service_key_scopes ("name:scope1+scope2,...").
+    service_key_scopes: str = ""
+    # If set, only these client IPs may use service keys (defence in depth).
+    service_allowed_ips: str = ""
 
 
 @lru_cache

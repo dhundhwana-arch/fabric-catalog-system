@@ -15,6 +15,10 @@ for future integration with the other seven Custom Shirt Studio modules.
 
 - Fabric, category, colour-variant, image, price-history and inventory CRUD
 - Permanent, database-allocated IDs (`FAB-001`, `FVAR-001`, `FIMG-001`, `FLOT-001`, `FCAT-001`)
+- **Concurrency-safe inventory**: atomic conditional updates, optimistic
+  concurrency for stock-takes, idempotent mutations, append-only ledger
+- **Scoped service credentials** for backend-to-backend module integration
+- **Alembic migrations** verified on SQLite and PostgreSQL 16
 - Search, category/type/colour/price/availability filtering, sorting, pagination
 - Customer-facing catalogue + admin panel (single-page app, mobile-friendly)
 - Image upload with type/size/magic-byte + decode validation and safe generated names
@@ -36,8 +40,11 @@ app/
   services.py      Business logic layer
   routers/         fabrics, variants, categories, colours, images,
                    prices, inventory, suppliers, export
+  inventory_service.py  Atomic inventory ops (adjust/reserve/release/dispatch)
+  rate_limit.py    Rate limiting (memory or shared Redis)
   static/          Customer catalogue + admin UI (HTML/CSS/JS)
-tests/             62 pytest tests (incl. concurrency + security)
+alembic/           Schema migrations (baseline bf18530135e8)
+tests/             123 pytest tests (concurrency, migrations, contracts, security)
 docs/              Data model, colour, image, inventory, API, installation docs
 ```
 

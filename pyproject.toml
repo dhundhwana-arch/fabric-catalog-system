@@ -1,6 +1,6 @@
 [project]
 name = "fabric-catalog-system"
-version = "1.0.1"
+version = "1.1.0"
 description = "Custom Shirt Studio — Module 02: Fabric Catalog System"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -12,10 +12,35 @@ dependencies = [
     "pydantic-settings>=2.0",
     "python-multipart>=0.0.9",
     "pillow>=10.0.0",
+    "alembic>=1.13",
+    "psycopg[binary]>=3.1",
 ]
+
+[project.optional-dependencies]
+redis = ["redis>=5.0"]
+dev = ["pytest>=8.0", "httpx>=0.27", "ruff>=0.6", "fakeredis>=2.20"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# Deliberately pragmatic: correctness and clarity rules, not style churn.
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = [
+    "B008",  # FastAPI Depends()/File() in defaults is the framework idiom
+    "B904",  # raise-from already applied where it matters
+    "E501",  # long lines are reported by the formatter, not the linter
+    "SIM105",  # explicit try/except-pass is clearer in a few spots
+    "UP042",  # (str, Enum) is intentional: values must stay plain strings for JSON/DB
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests legitimately use blind excepts to observe failures and long fixtures.
+"tests/*" = ["BLE001", "B017", "E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]

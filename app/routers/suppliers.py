@@ -3,14 +3,13 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth import require_admin
+from app.auth import require_scope
 from app.database import get_db
-from app.id_generator import next_id
 from app.models import SupplierReference
 from app.schemas import SupplierCreate, SupplierOut
 from app.services import get_fabric_or_404
 
-router = APIRouter(prefix="/suppliers", tags=["suppliers"], dependencies=[Depends(require_admin)])
+router = APIRouter(prefix="/suppliers", tags=["suppliers"], dependencies=[Depends(require_scope("supplier:read"))])
 
 
 @router.post("", response_model=SupplierOut, status_code=201)

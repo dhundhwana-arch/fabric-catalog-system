@@ -109,3 +109,22 @@ def seeded(client, admin_headers):
         headers=admin_headers,
     ).json()
     return {"category": cat, "fabric": fab, "v1": v1, "v2": v2}
+
+
+@pytest.fixture()
+def service_keys(monkeypatch):
+    """Configure two backend service credentials with distinct scopes.
+
+    module01: catalog:read + inventory:write (deliberately NOT supplier:read)
+    module07: inventory:write only
+    """
+    from app.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "service_api_keys", "module01:svc-key-1,module07:svc-key-7")
+    monkeypatch.setattr(
+        settings,
+        "service_key_scopes",
+        "module01:catalog:read+inventory:write,module07:inventory:write",
+    )
+    return settings

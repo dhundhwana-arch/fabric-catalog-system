@@ -1,5 +1,55 @@
 # Changelog
 
+## [1.1.0] — 2026-11-18
+
+Hardening release: closes audit residuals R1, R4, R5 and prepares the
+Module 01 / Module 07 integration contracts.
+
+### Added
+- **Atomic inventory operations** (`app/inventory_service.py`):
+  `POST /inventory/{pk}/adjust` (relative delta), `/reserve`, `/release`,
+  `/dispatch`. All are single conditional `UPDATE`s, so concurrent writers
+  cannot lose updates or oversell.
+- **Optimistic concurrency** on stock-takes: `PUT /inventory/{pk}` now
+  requires `expected_revision` or `expected_stock_quantity` (`428`
+  otherwise) and returns `409` on a stale write.
+- **Idempotent mutations**: `Idempotency-Key` header, claimed before work,
+  original response replayed with `Idempotent-Replay: true`.
+- `inventory_lots.revision` token; `inventory_movements.stock_after`,
+  `reserved_after`, `idempotency_key`.
+- `GET /inventory/{pk}/movements` — append-only audit ledger.
+- **Scoped service credentials** (`SERVICE_API_KEYS`,
+  `SERVICE_KEY_SCOPES`, `SERVICE_ALLOWED_IPS`) for backend-to-backend
+  calls. Module 01 is not granted `supplier:read`.
+- **Rate limiting backends** (`RATE_LIMIT_BACKEND`): `memory`
+  (process-local), `redis` (shared), `off`. Response headers state the
+  scope. Fail-open/fail-closed configurable.
+- **Alembic migrations** with baseline `bf18530135e8`, verified on SQLite
+  and PostgreSQL 16.2.
+- Docs: `ARCHITECTURE.md`, `MIGRATIONS.md`,
+  `MODULE_01_INTEGRATION_CONTRACT.md`, `INVENTORY_API_MODULE_07.md`.
+- Tests: 62 → 126.
+
+### Changed
+- `PUT /inventory/{pk}` is now a guarded stock-take, not a general write
+  path. `reserved_quantity` defaults to "unchanged" instead of 0.
+- Production startup refuses `CORS_ORIGINS=*`.
+- `app/services.py` no longer contains `upsert_inventory`; the
+  implementation moved to `app/inventory_service.py`.
+- `/suppliers` requires `supplier:read` (admin key still satisfies it).
+- Ruff is configured with a real rule set (`E,F,W,I,UP,B,C4,SIM`) and the
+  codebase passes cleanly.
+
+### Fixed
+- Idempotent replay returned `"<InventoryLot object at 0x...>"` instead of
+  the original JSON body — replays now return the stored response.
+- Concurrent requests sharing an `Idempotency-Key` all returned `202`
+  (the in-flight claim) instead of one applying and the rest replaying.
+- `_with_retry` did not roll the session back between attempts, so retries
+  raised `PendingRollbackError`.
+- Alembic `downgrade` left PostgreSQL ENUM types behind, breaking
+  re-upgrade (PostgreSQL-only; SQLite could not reveal it).
+
 ## [1.0.1] — 2026-11-16
 
 Independent technical verification pass. No API-breaking changes.

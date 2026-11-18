@@ -10,3 +10,7 @@ test_uploads/
 *.egg-info/
 dist/
 build/
+live_uploads/
+*.db-wal
+*.db-shm
+.ruff_cache/

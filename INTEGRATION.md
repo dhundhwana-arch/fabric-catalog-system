@@ -53,10 +53,12 @@ admin-only and never appears in public responses).
 - **Module 06 (measurement guide):** No direct dependency.
 - **Module 07 (order manager):** Persist selected `fabric_id` + `variant_id`
   on the order; check `GET /api/v1/inventory/{variant_pk}` before promising
-  stock. Reservations: `PUT /api/v1/inventory/{variant_pk}` with
-  `reserved_quantity` (admin token required — PROPOSED: order-service token).
-  Note this endpoint sets absolute quantities, not deltas; an order service
-  must read-then-write and handle `422` (oversell) as a hard stop.
+  stock. **Use the atomic reservation endpoints** (service key with
+  `inventory:write` scope) —
+  `POST /inventory/{pk}/reserve`, `/release`, `/dispatch`
+  (`docs/INVENTORY_API_MODULE_07.md`). They are conditional single-statement
+  updates, so concurrent order writers cannot oversell or lose a hold.
+  Handle `409` as "do not promise this fabric".
 - **Module 08 (admin dashboard):** Use admin endpoints for catalogue/stock
   management; export via `/api/v1/export`.
 
@@ -76,9 +78,30 @@ admin-only and never appears in public responses).
 
 ## Authentication
 
-Public GETs are open. Mutations require `Authorization: Bearer <ADMIN_API_KEY>`.
-Per-module service accounts / OAuth are PROPOSED, pending confirmation from
-the other modules.
+Two credential types, never interchangeable:
+
+| Credential | Who | Access |
+|---|---|---|
+| `ADMIN_API_KEY` | owner/staff via Module 02 admin UI | everything |
+| `SERVICE_API_KEYS` | other modules, backend-to-backend | only its granted scopes |
+
+Scopes: `catalog:read`, `catalog:write`, `inventory:read`,
+`inventory:write`, `supplier:read`.
+
+```env
+SERVICE_API_KEYS=module01:<secret>,module07:<secret>
+SERVICE_KEY_SCOPES=module01:catalog:read+inventory:write,module07:inventory:write
+```
+
+A service key with no scope entry gets **no** privileges. Module 01 is
+deliberately **not** granted `supplier:read`. Keys are compared in
+constant time and are never exposed on `/health` or in the OpenAPI schema.
+
+**Browser clients never receive either credential.** The frontend only
+calls public GETs, or Module 01's own backend.
+
+Full contracts: [`docs/MODULE_01_INTEGRATION_CONTRACT.md`](docs/MODULE_01_INTEGRATION_CONTRACT.md)
+and [`docs/INVENTORY_API_MODULE_07.md`](docs/INVENTORY_API_MODULE_07.md).
 
 All mutating endpoints return `401` without a valid Bearer token (verified).
 `ADMIN_API_KEY` must be a strong secret when `APP_ENV=production` — the app
@@ -102,10 +125,27 @@ refuses to start otherwise.
    fabric and its variants vanish from `/fabrics`, `/variants` and
    `/colours`; images, lots and price history are retained. Consumers that
    cache catalogue data should invalidate on archive.
-5. **Overselling is prevented.** Inventory rejects negative stock and
-   `reserved_quantity > stock_quantity` with `422`.
+5. **Overselling is prevented under concurrency.** Inventory writes are
+   single atomic conditional `UPDATE`s, not read-then-write:
+   `reserve` is conditional on `stock - reserved >= qty`, `adjust` is
+   conditional on the resulting stock staying >= 0, and a physical
+   stock-take must carry `expected_revision`/`expected_stock_quantity`
+   (stale writes get `409`, unguarded ones `428`).
+   Verified: 20 concurrent reservations against stock 10 → exactly 10
+   held; 60 concurrent over live HTTP on PostgreSQL → 50 held, 10 refused,
+   never `reserved > stock`.
+6. **Inventory mutations are idempotent.** Send `Idempotency-Key`; a retry
+   replays the original response (`Idempotent-Replay: true`) instead of
+   moving stock twice. Verified with 12 concurrent identical requests
+   applying exactly one reservation.
+7. **Movement history is append-only.** Every change writes an
+   `inventory_movements` row with `stock_after`/`reserved_after`
+   snapshots, readable at `GET /inventory/{variant_pk}/movements`.
 
-## Module 01 integration contract (PROPOSED — needs owner approval)
+## Module 01 integration contract
+
+Owner-approved architecture; full contract with example payloads in
+[`docs/MODULE_01_INTEGRATION_CONTRACT.md`](docs/MODULE_01_INTEGRATION_CONTRACT.md).
 
 Module 01 is the platform shell. Proposal for how it consumes Module 02:
 
@@ -146,10 +186,19 @@ API version is in the path (`/api/v1`). Errors use standard HTTP codes with
 
 ## Known limitations
 
-- Single admin API key (no per-user roles, no per-service tokens yet).
-- Rate limiting is in-process (per worker); use a shared limiter at the
-  reverse proxy for multi-worker deployments.
+- No per-user roles or audit of *which human* changed what; the admin key
+  is still a single shared secret.
+- Rate limiting defaults to **process-local** (`RATE_LIMIT_BACKEND=memory`).
+  Set `RATE_LIMIT_BACKEND=redis` + `REDIS_URL` for a genuinely shared limit
+  across workers and replicas. The Redis path is tested against
+  `fakeredis`, not a real Redis server (see audit report limitation L2).
 - `id_sequences` allocation is atomic per statement; multi-process SQLite
   remains discouraged — use PostgreSQL for more than one worker.
+- Reservations have no server-side link to an order and no TTL. Both are
+  open decisions with Module 07 (`docs/INVENTORY_API_MODULE_07.md` §6).
+- No change-notification (webhook/ETag) for catalogue updates, so a
+  consumer that caches will hold stale data until it re-reads.
+- Uploaded image files are not garbage-collected when their row is
+  deleted.
 - Local-disk image storage (Cloudinary/S3 adapter is a future swap).
 - No webhooks/events yet (PROPOSED for order/stock sync).

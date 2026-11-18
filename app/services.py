@@ -161,67 +161,11 @@ def record_price(db: Session, variant_id: int, price: Decimal, currency: str, un
     return row
 
 
-def upsert_inventory(
-    db: Session,
-    variant_id: int,
-    stock: Decimal,
-    reserved: Decimal,
-    unit,
-    movement_type,
-    reference: str | None,
-) -> models.InventoryLot:
-    variant = get_variant_or_404(db, variant_id)
-    if stock < 0 or reserved < 0:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=422, detail="Stock quantities cannot be negative")
-    if reserved > stock:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=422, detail="Reserved quantity cannot exceed stock quantity")
-
-    def _do():
-        lot = db.execute(
-            select(models.InventoryLot).where(models.InventoryLot.variant_id == variant.id)
-        ).scalar_one_or_none()
-        if lot is None:
-            lot = models.InventoryLot(
-                lot_id=next_id(db, "lot"),
-                variant_id=variant.id,
-                stock_quantity=stock,
-                reserved_quantity=reserved,
-                unit=unit,
-            )
-            db.add(lot)
-            db.flush()
-        else:
-            lot.stock_quantity = stock
-            lot.reserved_quantity = reserved
-            lot.unit = unit
-        db.add(
-            models.InventoryMovement(
-                lot_id=lot.id,
-                movement_type=movement_type,
-                quantity=stock,
-                reference=reference,
-            )
-        )
-        db.commit()
-        db.refresh(lot)
-        return lot
-
-    try:
-        # Two concurrent first-time PUTs can both see "no lot"; the UNIQUE
-        # constraint on inventory_lots.variant_id turns that race into an
-        # IntegrityError which we retry as an update.
-        return _with_retry(db, _do)
-    except IntegrityError:
-        db.rollback()
-        raise
-
-
 def available_quantity(lot: models.InventoryLot) -> Decimal:
-    return Decimal(str(lot.stock_quantity)) - Decimal(str(lot.reserved_quantity))
+    """Deprecated shim - use ``app.inventory_service.available_quantity``."""
+    from app.inventory_service import available_quantity as _available
+
+    return _available(lot)
 
 
 def colour_list(db: Session) -> list[dict]:

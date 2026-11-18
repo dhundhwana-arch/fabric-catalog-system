@@ -111,8 +111,8 @@ class FabricOut(BaseModel):
 
 class FabricDetailOut(FabricOut):
     category: CategoryOut | None = None
-    variants: list["VariantOut"] = []
-    images: list["ImageOut"] = []
+    variants: list[VariantOut] = []
+    images: list[ImageOut] = []
 
 
 # ---------------------------------------------------------------------------
@@ -261,23 +261,71 @@ class SupplierOut(BaseModel):
 # Inventory
 # ---------------------------------------------------------------------------
 class InventoryUpdate(BaseModel):
-    stock_quantity: Decimal = Field(ge=0)
-    reserved_quantity: Decimal = Field(default=Decimal("0"), ge=0)
-    unit: Unit = Unit.METER
-    movement_type: MovementType = MovementType.ADJUST
-    reference: str | None = None
+    """Absolute stock correction (physical recount).
 
-    _stock = field_validator("stock_quantity", "reserved_quantity", mode="before")(
-        classmethod(lambda cls, v: _validate_qty(v))
-    )
+    ``expected_stock_quantity`` or ``expected_revision`` is REQUIRED by the
+    service layer (428 if absent) so a stale caller cannot erase another
+    clerk's movement. For everyday movements use the relative
+    ``POST /inventory/{variant_pk}/adjust`` endpoint instead.
+    """
+
+    stock_quantity: Decimal = Field(ge=0)
+    reserved_quantity: Decimal | None = Field(default=None, ge=0)
+    unit: Unit = Unit.METER
+    reference: str | None = None
+    expected_stock_quantity: Decimal | None = Field(default=None, ge=0)
+    expected_revision: int | None = Field(default=None, ge=0)
+
+    _stock = field_validator(
+        "stock_quantity", "reserved_quantity", "expected_stock_quantity", mode="before"
+    )(classmethod(lambda cls, v: _validate_qty(v) if v is not None else v))
 
     @field_validator("reserved_quantity")
     @classmethod
-    def _reserved_le_stock(cls, v: Decimal, info) -> Decimal:
+    def _reserved_le_stock(cls, v: Decimal | None, info) -> Decimal | None:
         stock = info.data.get("stock_quantity")
-        if stock is not None and v > stock:
+        if v is not None and stock is not None and v > stock:
             raise ValueError("reserved_quantity cannot exceed stock_quantity")
         return v
+
+
+class _InventoryOpBase(BaseModel):
+    unit: Unit = Unit.METER
+    reference: str | None = Field(default=None, max_length=200)
+
+
+class InventoryAdjustRequest(_InventoryOpBase):
+    """Relative stock delta. Negative values reduce stock, never below zero."""
+
+    quantity: Decimal = Field(description="Signed delta, e.g. 10 or -2.5")
+    movement_type: MovementType = MovementType.ADJUST
+
+    _qty = field_validator("quantity", mode="before")(
+        classmethod(lambda cls, v: Decimal(str(v)))
+    )
+
+    @field_validator("quantity")
+    @classmethod
+    def _not_zero(cls, v: Decimal) -> Decimal:
+        if v == 0:
+            raise ValueError("quantity must not be zero")
+        return v
+
+
+class ReserveRequest(_InventoryOpBase):
+    quantity: Decimal = Field(gt=0)
+
+    _qty = field_validator("quantity", mode="before")(
+        classmethod(lambda cls, v: Decimal(str(v)))
+    )
+
+
+class ReleaseRequest(ReserveRequest):
+    pass
+
+
+class DispatchRequest(ReserveRequest):
+    pass
 
 
 class InventoryOut(BaseModel):
@@ -289,7 +337,22 @@ class InventoryOut(BaseModel):
     stock_quantity: Decimal
     reserved_quantity: Decimal
     unit: Unit
+    revision: int = 0
     last_updated: datetime
+
+
+class InventoryMovementOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    lot_id: int
+    movement_type: MovementType
+    quantity: Decimal
+    reference: str | None
+    idempotency_key: str | None = None
+    stock_after: Decimal | None = None
+    reserved_after: Decimal | None = None
+    created_at: datetime
 
 
 # ---------------------------------------------------------------------------

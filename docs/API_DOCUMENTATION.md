@@ -26,6 +26,44 @@ Health: `GET /health`.
 `POST /api/v1/prices`, `PUT /api/v1/inventory/{variant_pk}`,
 `GET/POST /api/v1/suppliers` (internal procurement data).
 
+The admin key satisfies every scope. Backend modules should use a
+**service key** with the minimum scope instead (see Authentication below).
+
+## Inventory write endpoints (v1.1)
+
+Prefer these over `PUT /inventory/{pk}`, which is now a guarded stock-take.
+
+| Method | Path | Body | Conflict |
+|---|---|---|---|
+| POST | `/api/v1/inventory/{pk}/adjust` | `{quantity: "5.000"}` signed delta | `409` if stock would go negative |
+| POST | `/api/v1/inventory/{pk}/reserve` | `{quantity: "2.000"}` | `409` if `stock - reserved < qty` |
+| POST | `/api/v1/inventory/{pk}/release` | `{quantity: "2.000"}` | `409` if releasing more than held |
+| POST | `/api/v1/inventory/{pk}/dispatch` | `{quantity: "2.000"}` | `409` unless reserved and in stock |
+| PUT | `/api/v1/inventory/{pk}` | `{stock_quantity, expected_revision}` | `409` stale, `428` unguarded |
+| GET | `/api/v1/inventory/{pk}/movements` | – | append-only ledger |
+
+All four `POST`s accept `Idempotency-Key: <uuid>`; a retry replays the
+original response with `Idempotent-Replay: true`.
+
+## Authentication
+
+| Credential | Env var | Grants |
+|---|---|---|
+| Admin (human) | `ADMIN_API_KEY` | everything |
+| Service (machine) | `SERVICE_API_KEYS` + `SERVICE_KEY_SCOPES` | listed scopes only |
+
+Scopes: `catalog:read`, `catalog:write`, `inventory:read`,
+`inventory:write`, `supplier:read`. Missing credential → `401`,
+insufficient scope → `403`. Keys are compared in constant time and never
+appear in `/openapi.json` or `/health`.
+
+## Rate limiting
+
+`RATE_LIMIT_BACKEND=memory` limits **this process only** (N workers ≈ N×
+the limit). `redis` shares the limit via `REDIS_URL`. Every response
+carries `X-RateLimit-Scope`. Exceeding returns `429` with `Retry-After`.
+`/health` is exempt.
+
 ## Examples
 
 Create a fabric:

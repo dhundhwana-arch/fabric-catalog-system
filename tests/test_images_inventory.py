@@ -72,14 +72,33 @@ def test_upload_valid_png(client, admin_headers, seeded):
 
 
 def test_inventory_update_and_negative_rejection(client, admin_headers, seeded):
+    """PUT is an absolute recount: it must carry the value last read."""
+
     vid = seeded["v1"]["id"]
-    r = client.put(f"/api/v1/inventory/{vid}", json={"stock_quantity": "10.5", "reserved_quantity": "2"}, headers=admin_headers)
-    assert r.status_code == 200
+    r = client.put(
+        f"/api/v1/inventory/{vid}",
+        json={"stock_quantity": "10.5", "reserved_quantity": "2", "expected_stock_quantity": "0"},
+        headers=admin_headers,
+    )
+    assert r.status_code == 200, r.text
     assert float(r.json()["stock_quantity"]) == 10.5
-    bad = client.put(f"/api/v1/inventory/{vid}", json={"stock_quantity": "-1"}, headers=admin_headers)
+    bad = client.put(
+        f"/api/v1/inventory/{vid}",
+        json={"stock_quantity": "-1", "expected_stock_quantity": "10.5"},
+        headers=admin_headers,
+    )
     assert bad.status_code == 422
-    over = client.put(f"/api/v1/inventory/{vid}", json={"stock_quantity": "1", "reserved_quantity": "5"}, headers=admin_headers)
+    over = client.put(
+        f"/api/v1/inventory/{vid}",
+        json={"stock_quantity": "1", "reserved_quantity": "5", "expected_stock_quantity": "10.5"},
+        headers=admin_headers,
+    )
     assert over.status_code == 422
+    # Unguarded absolute write is refused: this is the R4 fix.
+    unguarded = client.put(
+        f"/api/v1/inventory/{vid}", json={"stock_quantity": "99"}, headers=admin_headers
+    )
+    assert unguarded.status_code == 428
 
 
 def test_export_json_and_csv(client, seeded):

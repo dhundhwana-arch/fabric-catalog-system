@@ -6,12 +6,11 @@ never used for monetary values.
 from __future__ import annotations
 
 import enum
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import (
     Boolean,
     DateTime,
-    Enum as SAEnum,
     ForeignKey,
     Integer,
     Numeric,
@@ -19,13 +18,16 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy import (
+    Enum as SAEnum,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class AvailabilityStatus(str, enum.Enum):
@@ -59,6 +61,13 @@ class Unit(str, enum.Enum):
 
 
 class MovementType(str, enum.Enum):
+    """Every inventory change is recorded with one of these types.
+
+    Reservation lifecycle: ``RESERVE`` -> (``RELEASE`` | ``DISPATCH``).
+    ``DISPATCH`` is the only operation that reduces ``stock_quantity`` as a
+    result of an order; ``RECEIVE`` and ``ADJUST`` change stock directly.
+    """
+
     RECEIVE = "RECEIVE"
     RESERVE = "RESERVE"
     RELEASE = "RELEASE"
@@ -90,7 +99,7 @@ class FabricCategory(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False)
 
-    fabrics: Mapped[list["Fabric"]] = relationship(back_populates="category", cascade="save-update, merge")
+    fabrics: Mapped[list[Fabric]] = relationship(back_populates="category", cascade="save-update, merge")
 
 
 # ---------------------------------------------------------------------------
@@ -116,13 +125,13 @@ class Fabric(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False)
 
     category: Mapped[FabricCategory | None] = relationship(back_populates="fabrics")
-    variants: Mapped[list["FabricVariant"]] = relationship(
+    variants: Mapped[list[FabricVariant]] = relationship(
         back_populates="fabric", cascade="all, delete-orphan", lazy="selectin"
     )
-    images: Mapped[list["FabricImage"]] = relationship(
+    images: Mapped[list[FabricImage]] = relationship(
         back_populates="fabric", cascade="all, delete-orphan", lazy="selectin"
     )
-    supplier_references: Mapped[list["SupplierReference"]] = relationship(
+    supplier_references: Mapped[list[SupplierReference]] = relationship(
         back_populates="fabric", cascade="all, delete-orphan", lazy="selectin"
     )
 
@@ -147,20 +156,20 @@ class FabricVariant(Base):
         SAEnum(AvailabilityStatus), default=AvailabilityStatus.UNKNOWN, nullable=False, index=True
     )
     unit: Mapped[Unit] = mapped_column(SAEnum(Unit), default=Unit.METER, nullable=False)
-    customer_price: Mapped["Numeric | None"] = mapped_column(Numeric(12, 2), nullable=True)
+    customer_price: Mapped[Numeric | None] = mapped_column(Numeric(12, 2), nullable=True)
     currency: Mapped[str] = mapped_column(String(3), default="INR", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False)
 
     fabric: Mapped[Fabric] = relationship(back_populates="variants")
-    images: Mapped[list["FabricImage"]] = relationship(
+    images: Mapped[list[FabricImage]] = relationship(
         back_populates="variant", cascade="all, delete-orphan", lazy="selectin"
     )
-    prices: Mapped[list["FabricPrice"]] = relationship(
+    prices: Mapped[list[FabricPrice]] = relationship(
         back_populates="variant", cascade="all, delete-orphan", lazy="selectin"
     )
-    lots: Mapped[list["InventoryLot"]] = relationship(
+    lots: Mapped[list[InventoryLot]] = relationship(
         back_populates="variant", cascade="all, delete-orphan", lazy="selectin"
     )
 
@@ -201,7 +210,7 @@ class FabricPrice(Base):
     variant_id: Mapped[int] = mapped_column(
         ForeignKey("fabric_variants.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    customer_price: Mapped["Numeric"] = mapped_column(Numeric(12, 2), nullable=False)
+    customer_price: Mapped[Numeric] = mapped_column(Numeric(12, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="INR", nullable=False)
     unit: Mapped[Unit] = mapped_column(SAEnum(Unit), default=Unit.METER, nullable=False)
     effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
@@ -222,7 +231,7 @@ class SupplierReference(Base):
     )
     supplier_name: Mapped[str] = mapped_column(String(200), nullable=False)
     supplier_code: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    procurement_price: Mapped["Numeric | None"] = mapped_column(Numeric(12, 2), nullable=True)
+    procurement_price: Mapped[Numeric | None] = mapped_column(Numeric(12, 2), nullable=True)
     currency: Mapped[str] = mapped_column(String(3), default="INR", nullable=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
@@ -247,13 +256,16 @@ class InventoryLot(Base):
         unique=True,
         index=True,
     )
-    stock_quantity: Mapped["Numeric"] = mapped_column(Numeric(12, 3), default=0, nullable=False)
-    reserved_quantity: Mapped["Numeric"] = mapped_column(Numeric(12, 3), default=0, nullable=False)
+    stock_quantity: Mapped[Numeric] = mapped_column(Numeric(12, 3), default=0, nullable=False)
+    reserved_quantity: Mapped[Numeric] = mapped_column(Numeric(12, 3), default=0, nullable=False)
     unit: Mapped[Unit] = mapped_column(SAEnum(Unit), default=Unit.METER, nullable=False)
+    # Optimistic concurrency token: bumped by every atomic mutation so a
+    # caller that read the lot earlier can detect that it went stale.
+    revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default="0")
     last_updated: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False)
 
     variant: Mapped[FabricVariant] = relationship(back_populates="lots")
-    movements: Mapped[list["InventoryMovement"]] = relationship(
+    movements: Mapped[list[InventoryMovement]] = relationship(
         back_populates="lot", cascade="all, delete-orphan", lazy="selectin"
     )
 
@@ -266,8 +278,39 @@ class InventoryMovement(Base):
         ForeignKey("inventory_lots.id", ondelete="CASCADE"), nullable=False, index=True
     )
     movement_type: Mapped[MovementType] = mapped_column(SAEnum(MovementType), nullable=False)
-    quantity: Mapped["Numeric"] = mapped_column(Numeric(12, 3), nullable=False)
+    quantity: Mapped[Numeric] = mapped_column(Numeric(12, 3), nullable=False)
     reference: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
+    # Client-supplied idempotency key. UNIQUE, so a retried request with the
+    # same key can never move stock twice; the original outcome is replayed.
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(80), nullable=True, unique=True, index=True
+    )
+    # Post-operation snapshot, so the ledger is readable without replaying.
+    stock_after: Mapped[Numeric | None] = mapped_column(Numeric(12, 3), nullable=True)
+    reserved_after: Mapped[Numeric | None] = mapped_column(Numeric(12, 3), nullable=True)
+
     lot: Mapped[InventoryLot] = relationship(back_populates="movements")
+
+
+class IdempotencyRecord(Base):
+    """Stored HTTP response for a replayed idempotent request.
+
+    Kept separate from ``inventory_movements`` so the replay can return the
+    exact original body/status, not just "already applied".
+    """
+
+    __tablename__ = "idempotency_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    idempotency_key: Mapped[str] = mapped_column(
+        String(80), nullable=False, unique=True, index=True
+    )
+    scope: Mapped[str] = mapped_column(String(60), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    status_code: Mapped[int] = mapped_column(Integer, nullable=False)
+    response_body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )

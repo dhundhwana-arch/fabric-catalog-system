@@ -4,6 +4,7 @@
 **Branch:** `arena/9fb44bec-fabric-catalog-system`
 **Audited commits:** `8761caa` (implementation) → `f8c6e1c` (fixes applied during audit)
 **Merge status:** **NOT MERGED.** `main` remains at `6524f79`. Owner approval required.
+**Hardening release 1.1.0** (2026-11-18) — see §13 for residual-issue closure.
 **Verification date:** 2026-11-16
 **Tests:** 62 passed, 0 failed, 1 non-blocking warning
 
@@ -320,7 +321,13 @@ Full text in `INTEGRATION.md`; summary:
 
 ---
 
-## 9. Residual issues (NOT fixed — reported honestly)
+## 9. Residual issues (status after hardening pass, 2026-11-18)
+
+> **Update:** R1, R4 and R5 have since been addressed in the hardening
+> release. See §13 for the closure report. The table below is retained as
+> the original audit snapshot.
+
+
 
 | ID | Severity | Issue | Note |
 |---|---|---|---|
@@ -401,3 +408,218 @@ is added for the PostgreSQL production target (R5). Until then keep Module 02
 single-worker on SQLite, or PostgreSQL if multiple workers are needed.
 
 I am not starting Module 01 or any other module.
+
+
+---
+
+# 13. Hardening release — residual issue closure
+
+**Release:** 1.1.0 **Date:** 2026-11-18
+**Prior audit HEAD:** `4ce3e10` — see §1–§12 above.
+
+This section records what was closed, what was deliberately left open, and
+the evidence for each claim. It supersedes §9 for status purposes.
+
+## 13.1 Closure summary
+
+| ID | Issue | Status | Evidence |
+|---|---|---|---|
+| R1 | Rate limiter process-local only | **CLOSED (with caveat)** | `app/rate_limit.py`; memory + shared Redis backends; `tests/test_rate_limit_auth.py` (21 tests) |
+| R4 | Inventory lost updates / read-then-write | **CLOSED** | `app/inventory_service.py`; `tests/test_inventory_concurrency.py` (15 tests); live PG load test |
+| R5 | No migrations; PostgreSQL unverified | **CLOSED** | `alembic/versions/bf18530135e8`; `tests/test_migrations.py` (9 tests, 5 on real PG 16.2) |
+| R2 | Single admin key, no roles | OPEN (by design) | service keys added; human RBAC still absent |
+| R3 | `/suppliers` has no update/delete | OPEN | unchanged |
+| R6 | `/health` does not check DB | OPEN | unchanged |
+| R7 | Multi-process SQLite discouraged | OPEN (guidance) | documented; PG supported |
+| R8 | No upload GC | OPEN | unchanged |
+| R9 | Upload auth coverage narrow | CLOSED | general 401 sweep covers upload routes |
+| R10 | TestClient deprecation | OPEN (info) | library notice |
+
+## 13.2 R4 — inventory concurrency (Priority 1)
+
+**Root cause.** `PUT /inventory/{pk}` wrote absolute quantities that the
+caller had read earlier. Two concurrent clerks (or Module 07 writers) both
+read `stock=10, reserved=0`, both decide to reserve 2, both write
+`reserved=2`: one reservation is silently lost. There was also a
+check-then-act gap — availability was verified in Python, then written.
+
+**Fix — three separated concerns**, each a single conditional statement
+evaluated by the database:
+
+| Operation | Statement condition | Guarantees |
+|---|---|---|
+| `POST /adjust` (relative) | `stock + delta >= 0` | deltas compose; never negative |
+| `POST /reserve` | `stock - reserved >= qty` | concurrent holds cannot exceed stock |
+| `POST /release` | `reserved >= qty` | cannot release unheld stock |
+| `POST /dispatch` | `reserved >= qty AND stock >= qty` | ships only held+physical goods |
+| `PUT` (absolute) | `stock = expected AND/OR revision = expected` | stale writes rejected (`409`); unguarded refused (`428`) |
+
+`rowcount == 0` is the conflict signal. Because the condition and the write
+are one statement, there is no window between checking and acting.
+
+Additional properties:
+
+- **Optimistic concurrency token** `inventory_lots.revision`, bumped by
+  every mutation, exposed to callers.
+- **Negative stock is impossible**; no per-request escape hatch exists.
+  The documented physical-recount path is `PUT` with an explicit
+  `expected_revision`.
+- **History preserved**: every change appends an `inventory_movements` row
+  with before/after snapshots (`stock_after`, `reserved_after`), readable
+  at `GET /inventory/{pk}/movements`.
+- **Idempotency**: `Idempotency-Key` is claimed (INSERT, UNIQUE) *before*
+  work runs, then completed with the serialised response. A retry replays
+  the original body (`Idempotent-Replay: true`); a concurrent duplicate
+  waits for the winner. Key reuse with a different payload → `409`.
+
+**Evidence — real concurrent sessions (not TestClient):**
+
+| Test | Result |
+|---|---|
+| 20 concurrent `+5` receipts | exactly `100.000` |
+| 20 concurrent interleaved `+7`/`-3` | exactly `140.000` |
+| stock 10, 20 concurrent `-1` | exactly 10 succeed, 10 → 409, stock `0.000` |
+| stock 10, 20 concurrent `reserve(1)` | exactly 10 held, 10 → 409, `available == 0` |
+| 10 concurrent absolute writes, same revision | exactly 1 success, 9 → 409 |
+| 10 concurrent same-`Idempotency-Key` reserves | stock moved **once** |
+| 5 consecutive suite runs | 16 passed each time, no flake |
+
+**Evidence — live HTTP against real PostgreSQL 16.2:**
+
+```
+A) 60 concurrent reserve(1) vs stock 50
+   held=50  refused=10  other=[]
+   final stock=50.000 reserved=50.000   oversold: False
+
+B) 12 concurrent identical idempotent requests
+   statuses=[200]  replays=11
+   reserved=5.000   applied once: True
+
+C) stale guarded write
+   first=200   stale=409 "Stock was modified by someone else..."
+```
+
+## 13.3 R1 — rate limiting (Priority 2)
+
+**Implemented** (`app/rate_limit.py`), three explicit backends:
+
+| Backend | Scope | Honest description |
+|---|---|---|
+| `memory` (default) | **this process only** | N workers ⇒ roughly N× the limit; resets on restart |
+| `redis` | **shared across workers and replicas** | atomic `INCR`+`EXPIRE` on a per-minute bucket |
+| `off` | none | `RATE_LIMIT_PER_MINUTE=0` also disables |
+
+The response headers state the scope explicitly
+(`X-RateLimit-Scope: process-local` or `shared-across-workers`) so an
+operator can never mistake one for the other.
+
+- **Fail behaviour is configurable**: `RATE_LIMIT_FAIL_OPEN=true` allows
+  traffic if Redis dies (recommended — a cache outage should not be an
+  API outage); `false` returns `503`. Redis errors log only the exception
+  **type**, never the URL (which may embed a password).
+- **Header spoofing is closed**: `X-Forwarded-For` is ignored unless
+  `TRUSTED_PROXY_COUNT > 0`, and then the entry appended by the nearest
+  trusted proxy is used, not the client-supplied leftmost value.
+  Verified by `test_xff_ignored_when_no_trusted_proxies` and
+  `test_xff_honours_nearest_trusted_hop_not_client_supplied`.
+- `/health` is exempt so orchestrator probes are never throttled.
+- `/docs` remains readable; limits apply to `/api/*`.
+
+**Caveat, stated plainly:** the Redis path is verified against
+`fakeredis`, which exercises the real limiter code (bucketing, INCR,
+EXPIRE, fail-open) but is **not** a real Redis server. A live Redis
+integration test is still outstanding — tracked as L2 below. This is also
+why `memory` remains the default rather than quietly switching production
+to an untested-in-CI backend.
+
+## 13.4 R5 — migrations (Priority 3)
+
+- Alembic baseline `bf18530135e8`, generated with `--autogenerate`
+  **against a real PostgreSQL 16.2 server**, not SQLite.
+- `alembic.ini` contains **no credentials**; `env.py` resolves the URL from
+  `ALEMBIC_DATABASE_URL` then the app's `DATABASE_URL`.
+- `render_as_batch` is enabled for SQLite so one script set serves both.
+
+**Adoption safety (the "upgrade from current schema" requirement).** The
+previous deployment path was `create_all()`, leaving a populated database
+with no `alembic_version` row. A naive baseline would abort with "table
+already exists". `upgrade()` therefore inspects the live database and
+creates only missing objects — on a complete database it is a no-op that
+stamps the revision. **Nothing is dropped or altered**, so adopting an
+existing production database cannot destroy data.
+
+**A PostgreSQL-only defect found and fixed:** `downgrade()` left the five
+ENUM types behind, so `downgrade` → `upgrade` failed with
+"type already exists". SQLite has no ENUM types and could never reveal
+this. The baseline now drops them on PostgreSQL only.
+
+| Test (SQLite) | Result |
+|---|---|
+| clean database creation | PASSED |
+| `alembic check` — no ORM drift | PASSED |
+| upgrade from `create_all` schema, data preserved | PASSED |
+| downgrade → re-upgrade cycle | PASSED |
+
+| Test (PostgreSQL 16.2) | Result |
+|---|---|
+| clean database creation | PASSED |
+| `alembic check` — no ORM drift | PASSED |
+| upgrade from `create_all` schema, data preserved | PASSED |
+| column types: `NUMERIC(12,2)` money, `NUMERIC(12,3)` qty | PASSED |
+| downgrade → re-upgrade cycle | PASSED |
+
+Without `PG_TEST_URL` the five PostgreSQL tests report **skipped**, never
+passed — verified: `4 passed, 5 skipped`.
+
+## 13.5 Module 01 / Module 07 integration
+
+Implemented:
+
+- **Scoped service credentials** (`SERVICE_API_KEYS` /
+  `SERVICE_KEY_SCOPES`), constant-time comparison, optional IP allowlist.
+  Separate from the human admin key; a service key is never accepted as
+  admin.
+- **Module 01 is not granted `supplier:read`** — verified by test.
+- **CORS**: production now *refuses to start* with `CORS_ORIGINS=*`;
+  an explicit allowlist is mandatory.
+- **No credential reaches a browser**: verified that neither key appears in
+  `/openapi.json` or `/health`.
+- Contracts: `docs/MODULE_01_INTEGRATION_CONTRACT.md`,
+  `docs/INVENTORY_API_MODULE_07.md`, `docs/ARCHITECTURE.md`.
+- `tests/test_api_contract.py` — 18 tests pinning envelope keys, field
+  sets, by-code lookups, error shape, 401 vs 403, and privacy.
+
+## 13.6 Test evidence (whole release)
+
+```
+126 passed, 1 warning             # full suite, PostgreSQL enabled
+105 passed, 5 skipped             # without PG_TEST_URL
+ 16 passed  x5 consecutive runs   # concurrency subset, no flakes
+ 48/48 unique, 0 errors           # 6 OS processes, ID generation
+  9 passed                        # migrations (5 on real PG)
+All checks passed!                # ruff
+compile: OK                       # compileall
+```
+
+Suite grew 62 → 126 tests.
+
+## 13.7 Remaining limitations (L-series, honest)
+
+| ID | Limitation | Impact | Mitigation |
+|---|---|---|---|
+| L1 | **Redis path untested against a real Redis server** (fakeredis only) | medium | run `tests/test_rate_limit_auth.py` against real Redis before switching `RATE_LIMIT_BACKEND=redis` in production |
+| L2 | **No reservation→order link, no TTL** | medium | open decisions with Module 07 (`INVENTORY_API_MODULE_07.md` §6) |
+| L3 | **Multi-process SQLite not recommended** | medium | use PostgreSQL for >1 worker |
+| L4 | **No human RBAC / per-user audit** | medium | single shared admin key; recommended before multiple staff |
+| L5 | **No catalogue change notification** (webhook/ETag) | low | consumers must re-read |
+| L6 | `/health` does not verify DB connectivity | low | use `alembic check` / monitoring |
+| L7 | `/suppliers` is read+create only | low | Module 08 admin work |
+| L8 | Uploaded files not garbage-collected | low | retention policy needed |
+| L9 | No live-Redis CI job, no GitHub Actions pipeline | low | tests are local-only today |
+| L10 | PostgreSQL tested via ephemeral local server, not a managed service | low | same engine; connection/pool specifics untested |
+
+**Production readiness statement.** Module 02 is ready for a
+**single-worker PostgreSQL deployment** with an explicit CORS allowlist and
+a real `ADMIN_API_KEY`. It should **not** be described as ready for
+multi-replica production until L1 (real Redis verification) and L2
+(reservation contract with Module 07) are closed.

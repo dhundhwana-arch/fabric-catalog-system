@@ -15,7 +15,18 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
 from app.database import init_db
-from app.routers import categories, colours, export, fabrics, images, inventory, prices, suppliers, variants
+from app.rate_limit import RateLimitMiddleware, build_limiter
+from app.routers import (
+    categories,
+    colours,
+    export,
+    fabrics,
+    images,
+    inventory,
+    prices,
+    suppliers,
+    variants,
+)
 
 settings = get_settings()
 settings.validate_production()
@@ -33,37 +44,28 @@ app = FastAPI(
         "Module 02: Fabric catalogue, colours, images, prices and availability. "
         "Public GET endpoints are open; all mutating endpoints require an admin Bearer token."
     ),
-    version="1.0.1",
+    version="1.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
     lifespan=lifespan,
 )
 
-# --- Simple in-memory fixed-window rate limiter (per IP, per minute) ---
-if settings.rate_limit_per_minute > 0:
-    import time
-    from collections import defaultdict
-
-    from fastapi import Response
-    from starlette.middleware.base import BaseHTTPMiddleware
-
-    _hits: dict[str, list[float]] = defaultdict(list)
-
-    class RateLimitMiddleware(BaseHTTPMiddleware):
-        async def dispatch(self, request: Request, call_next):
-            ip = request.client.host if request.client else "unknown"
-            now = time.time()
-            window = [t for t in _hits[ip] if now - t < 60]
-            if len(window) >= settings.rate_limit_per_minute:
-                return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"})
-            window.append(now)
-            _hits[ip] = window
-            return await call_next(request)
-
-    app.add_middleware(RateLimitMiddleware)
+# Rate limiting: scope depends on RATE_LIMIT_BACKEND (see app/rate_limit.py).
+_limiter = build_limiter(settings)
+if _limiter is not None:
+    app.add_middleware(
+        RateLimitMiddleware,
+        limiter=_limiter,
+        trusted_proxy_count=settings.trusted_proxy_count,
+    )
 
 origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+if settings.app_env == "production" and "*" in origins:
+    raise RuntimeError(
+        "CORS_ORIGINS must be an explicit allowlist in production (got '*'). "
+        "Example: CORS_ORIGINS=https://studio.example.com"
+    )
 # Wildcard origins cannot be combined with credentials (browsers reject it,
 # and it would be insecure). Only allow credentials for explicit origins.
 app.add_middleware(
@@ -82,7 +84,7 @@ async def unhandled(request: Request, exc: Exception):  # pragma: no cover - saf
 
 @app.get("/health", tags=["health"])
 def health():
-    return {"status": "ok", "module": "fabric-catalog-system", "version": "1.0.1"}
+    return {"status": "ok", "module": "fabric-catalog-system", "version": "1.1.0"}
 
 
 @app.get("/api/v1", tags=["meta"])

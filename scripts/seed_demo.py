@@ -10,9 +10,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("DATABASE_URL", "sqlite:///./fabric_catalog.db")
 
 from app.database import SessionLocal, init_db  # noqa: E402
-from app.services import create_category, create_fabric, create_variant  # noqa: E402
-from app.schemas import CategoryCreate, FabricCreate, VariantCreate  # noqa: E402
 from app.models import AvailabilityStatus, SourcingMethod  # noqa: E402
+from app.schemas import FabricCreate, VariantCreate  # noqa: E402
+from app.services import create_category, create_fabric, create_variant  # noqa: E402
 
 
 def main():
